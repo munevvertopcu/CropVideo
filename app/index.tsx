@@ -1,45 +1,18 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons } from "@expo/vector-icons";
 import { Text, TouchableOpacity, View } from "react-native";
 
 export default function HomeScreen() {
   return (
-    <View style={{
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-      paddingHorizontal: 32
-    }}>
+    <View className="flex-1 justify-center items-center px-8">
       <Ionicons name="videocam-outline" size={80} color="#9CA3AF" />
-      <Text style={{
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#9CA3AF',
-        marginTop: 16,
-        marginBottom: 8
-      }}>
+      <Text className="text-2xl font-bold text-gray-400 mt-4 mb-2">
         No Videos Yet
       </Text>
-      <Text style={{
-        color: '#9CA3AF',
-        textAlign: 'center',
-        marginBottom: 32,
-        lineHeight: 24
-      }}>
+      <Text className="text-gray-400 text-center mb-8 leading-6">
         Start building your video diary by adding your first memorable moment
       </Text>
-      <TouchableOpacity
-        style={{
-          backgroundColor: '#3B82F6',
-          paddingHorizontal: 32,
-          paddingVertical: 16,
-          borderRadius: 25
-        }}
-      >
-        <Text style={{
-          color: 'white',
-          fontWeight: '600',
-          fontSize: 18
-        }}>
+      <TouchableOpacity className="bg-blue-500 px-8 py-4 rounded-full">
+        <Text className="text-white font-semibold text-lg">
           Add Your First Video
         </Text>
       </TouchableOpacity>
