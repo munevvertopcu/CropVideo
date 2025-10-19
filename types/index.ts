@@ -15,6 +15,7 @@ export interface VideoTrimmingState {
   startTime: number;
   endTime: number;
   duration: number;
+  trimmedUri: string;
 }
 
 export interface MetadataFormData {

@@ -1,8 +1,13 @@
-import { VideoTrimmingState } from '@/types';
-import Slider from "@react-native-community/slider";
 import { VideoView, useVideoPlayer } from "expo-video";
 import React, { useEffect, useMemo, useState } from 'react';
-import { Dimensions, Text, View } from 'react-native';
+import { Alert, Dimensions, Platform, Text, View } from 'react-native';
+import { useTrimVideo } from '../../hooks/useTrimVideo';
+import { useVideoDuration } from '../../hooks/useVideoDuration';
+import { VideoTrimmingState } from '../../types';
+import { Button } from '../ui/Button';
+import { SegmentInfoRow } from '../ui/SegmentInfoRow';
+import { SliderDurationLabels } from '../ui/SliderDurationLabels';
+import { TrimRangeSlider } from '../ui/TrimRangeSlider';
 
 interface VideoTrimmerProps {
   videoUri: string;
@@ -12,6 +17,7 @@ interface VideoTrimmerProps {
 }
 
 const { width: screenWidth } = Dimensions.get('window');
+const CLIP_DURATION_MS = 5000;
 
 export const VideoTrimmer: React.FC<VideoTrimmerProps> = ({
   videoUri,
@@ -21,75 +27,173 @@ export const VideoTrimmer: React.FC<VideoTrimmerProps> = ({
 }) => {
   const [actualDurationMs, setActualDurationMs] = useState<number>(0);
   const [startMs, setStartMs] = useState<number>(0);
-  const player = useVideoPlayer(({ uri: videoUri ?? "" } as unknown) as { uri: string });
+  const [endMs, setEndMs] = useState<number>(0);
+  const [displayedStartMs, setDisplayedStartMs] = useState<number>(0);
+  const [displayedEndMs, setDisplayedEndMs] = useState<number>(0);
+  const [trimmedUri, setTrimmedUri] = useState<string | null>(null);
+  const videoSource = useMemo(() => ({ uri: videoUri ?? "" } as { uri: string }), [videoUri]);
+  const player = useVideoPlayer(videoSource);
+
+  const { runTrim, isTrimming, resetTrim } = useTrimVideo({
+    onSuccess: ({ trimmedUri, startTime, endTime, duration }) => {
+      const trimmingState: VideoTrimmingState = {
+        startTime,
+        endTime,
+        duration,
+        trimmedUri
+      };
+      setTrimmedUri(trimmedUri);
+      onTrimStateChange(trimmingState);
+      onNext();
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Unexpected error trimming video.';
+      console.error('Trim failed:', error);
+      Alert.alert('Trim Failed', message);
+    }
+  });
 
   const effectiveDurationMs = actualDurationMs > 0 ? actualDurationMs : duration;
-  const endMs = useMemo(() => {
-    const safeDuration = Math.max(0, effectiveDurationMs - 500);
-    const maxEndMs = startMs + 5000;
-    return Math.min(maxEndMs, safeDuration);
-  }, [startMs, effectiveDurationMs]);
+
+  const startMaxMs = useMemo(() => {
+    if (!effectiveDurationMs || effectiveDurationMs <= 0) return 0;
+    return Math.max(0, effectiveDurationMs - CLIP_DURATION_MS);
+  }, [effectiveDurationMs]);
+
+
+  const clipDurationMs = useMemo(
+    () => Math.max(0, displayedEndMs - displayedStartMs),
+    [displayedEndMs, displayedStartMs]
+  );
+
+  const measuredDuration = useVideoDuration(player, videoUri);
+  useEffect(() => {
+    if (measuredDuration > 0) setActualDurationMs(measuredDuration);
+  }, [measuredDuration]);
 
   useEffect(() => {
-    if (videoUri && player) {
-      const checkDuration = () => {
-        try {
-          const duration = player.duration;
-          if (duration && duration > 0) {
-            const durationMs = Math.floor(duration * 1000);
-            setActualDurationMs(durationMs);
-            console.log(`Actual video duration: ${duration}s (${durationMs}ms)`);
-          }
-        } catch (error) {
-          console.log("Could not get actual duration from player:", error);
-        }
-      };
+    // Clamp start within valid bounds whenever duration changes
+    setStartMs(prev => {
+      const clampedStart = Math.min(Math.max(0, prev), startMaxMs);
+      return Number.isFinite(clampedStart) ? clampedStart : 0;
+    });
+  }, [startMaxMs]);
 
-      const timer = setTimeout(checkDuration, 1000);
-      return () => clearTimeout(timer);
+  useEffect(() => {
+    setTrimmedUri(null);
+  }, [startMs, endMs, videoUri]);
+
+  useEffect(() => {
+    setDisplayedStartMs(startMs);
+    setDisplayedEndMs(endMs);
+  }, [startMs, endMs]);
+
+  useEffect(() => {
+    resetTrim();
+    setStartMs(0);
+    setEndMs(Math.min(CLIP_DURATION_MS, effectiveDurationMs));
+  }, [videoUri, effectiveDurationMs, resetTrim]);
+
+  const handleRangeChange = (s: number, e: number) => {
+    setDisplayedStartMs(s);
+    setDisplayedEndMs(e);
+    setStartMs(s);
+    setEndMs(e);
+  };
+
+  const handleTrimPress = async () => {
+    if (!videoUri || isTrimming) return;
+
+    if (Platform.OS === 'web') {
+      Alert.alert(
+        'Unsupported Platform',
+        'Video trimming is only supported on Android and iOS devices.'
+      );
+      return;
     }
-  }, [videoUri, player]);
+
+    if (clipDurationMs <= 0) {
+      Alert.alert('Trim Error', 'Unable to determine trim range. Please try again.');
+      return;
+    }
+
+    const startRounded = Math.round(displayedStartMs);
+    const endRounded = Math.round(displayedEndMs);
+    const durationRounded = Math.max(0, Math.round(clipDurationMs));
+    const maxDurationRounded = Math.round(effectiveDurationMs);
+
+    if (endRounded <= startRounded) {
+      Alert.alert('Trim Error', 'End time must be greater than start time.');
+      return;
+    }
+
+    if (endRounded > maxDurationRounded) {
+      Alert.alert('Trim Error', 'End time exceeds the video duration.');
+      return;
+    }
+
+    try {
+      await runTrim({
+        uri: videoUri,
+        startMs: startRounded,
+        endMs: endRounded,
+        durationMs: durationRounded
+      });
+    } catch {
+      // already handled in onError. The try/catch here is there to prevent the error that occurs during mutateAsync (runTrim) from being carried up as “Unhandled promise rejection”.
+    }
+  };
 
   return (
     <View className="flex-1 bg-white p-4">
       <VideoView
-        style={{ width: screenWidth - 10, height: 200, backgroundColor: 'black', borderRadius: 12, alignSelf: "center" }}
+        style={{
+          width: screenWidth - 32,
+          height: 200,
+          backgroundColor: '#000000',
+          borderRadius: 12,
+          alignSelf: 'center',
+          flex: 1
+        }}
         player={player}
         nativeControls
       />
-
-      <Slider
-        minimumValue={0}
-        maximumValue={Math.max(0, effectiveDurationMs - 5500)}
-        value={Math.min(startMs, Math.max(0, effectiveDurationMs - 5500))}
-        onValueChange={(v) => setStartMs(Math.floor(v))}
-      />
-
-      <Text className="text-black text-center mb-4 text-base font-normal">
+      <View className="mt-6">
+        <TrimRangeSlider
+          durationMs={effectiveDurationMs}
+          startMs={startMs}
+          endMs={endMs}
+          fixedWindowMs={CLIP_DURATION_MS}
+          onChange={handleRangeChange}
+        />
+        <SliderDurationLabels
+          startMs={displayedStartMs}
+          endMs={displayedEndMs}
+          totalMs={effectiveDurationMs}
+        />
+      </View>
+      <Text className="text-black text-center mt-5 mb-3 text-base font-medium">
         Select 5-second segment
       </Text>
-
-      <View className="flex-row justify-between items-center mb-4 px-2 gap-4">
-        <View className="flex-1 items-center">
-          <Text className="text-black text-xs mb-1 font-normal">Start</Text>
-          <Text className="text-black text-lg font-bold">
-            {Math.floor(startMs / 1000)}s
+      <SegmentInfoRow
+        startMs={displayedStartMs}
+        endMs={displayedEndMs}
+        clipMs={clipDurationMs}
+      />
+      <View className="mt-6">
+        <Button
+          label="Trim & Continue"
+          onPress={handleTrimPress}
+          loading={isTrimming}
+          loadingLabel="Trimming..."
+          disabled={!videoUri || clipDurationMs <= 0}
+          variant="primary"
+        />
+        {trimmedUri && (
+          <Text className="text-xs text-gray-500 text-center mt-3">
+            Trim saved to: {trimmedUri}
           </Text>
-        </View>
-
-        <View className="flex-1 items-center">
-          <Text className="text-black text-xs mb-1 font-normal">Duration</Text>
-          <Text className="text-green-500 font-bold text-2xl">
-            {Math.floor(actualDurationMs / 1000)}
-          </Text>
-        </View>
-
-        <View className="flex-1 items-center">
-          <Text className="text-black text-xs mb-1 font-normal">End</Text>
-          <Text className="text-black text-lg font-bold">
-            {Math.floor(endMs / 1000)}s
-          </Text>
-        </View>
+        )}
       </View>
     </View>
   );
